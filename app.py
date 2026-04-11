@@ -45,9 +45,7 @@ def _clamp_result(result: dict) -> dict:
     return result
 
 
-@api.get("/")
-def root():
-    return {"status": "ok", "name": "Smart Code Review OpenEnv"}
+
 
 
 @api.post("/reset")
@@ -267,7 +265,7 @@ with gr.Blocks() as gradio_app:
 # Mount Gradio inside FastAPI and launch
 # ══════════════════════════════════════════════════════════════════════
 
-app = gr.mount_gradio_app(api, gradio_app, path="/ui")
+app = gr.mount_gradio_app(api, gradio_app, path="/")
 
 
 def main():
