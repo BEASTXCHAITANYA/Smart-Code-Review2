@@ -330,10 +330,10 @@ docker run -e API_KEY=your-key -e API_BASE_URL=your-url -p 7860:7860 smart-code-
 ## 📸 Screenshots
 
 ### 🧠 Smart Code Review UI
-![UI](assets/inference.png)
+![UI](assests/inference.png)
 
 ### 📊 Leaderboard & Consistency
-![Leaderboard](assets/leaderboard.png)
+![Leaderboard](assests/leaderboard.png)
 
 ---
 
