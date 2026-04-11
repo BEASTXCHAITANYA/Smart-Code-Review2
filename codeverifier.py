@@ -210,7 +210,7 @@ def check_test_cases(code: str, tests: list[dict]) -> tuple[float, int, int]:
 
     passed: int = int(sum(flags))
     total: int  = int(total)
-    score: float = float(f"{float(passed) / float(total):.4f}") if total > 0 else 0.0
+    score: float = float(f"{max(0.01, min(0.99, float(passed) / float(total))):.4f}") if total > 0 else 0.01
     return score, passed, total
 
 
