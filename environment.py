@@ -23,6 +23,17 @@ def _clamp(score: float) -> float:
     return float(max(SCORE_FLOOR, min(SCORE_CEIL, float(score))))
 
 
+def _default_axes() -> dict:
+    """Return axis scores all set to SCORE_FLOOR."""
+    return {
+        "score":         SCORE_FLOOR,
+        "issue_score":   SCORE_FLOOR,
+        "line_score":    SCORE_FLOOR,
+        "compile_score": SCORE_FLOOR,
+        "test_score":    SCORE_FLOOR,
+    }
+
+
 class CodeReviewEnv:
 
     def __init__(self):
@@ -56,10 +67,16 @@ class CodeReviewEnv:
         # Guard: episode already finished
         if self._done:
             last = self._last_result or {}
+            reward = _clamp(last.get("final_reward", SCORE_FLOOR))
             return {
-                "state":  self._build_observation(),
-                "reward": _clamp(last.get("final_reward", SCORE_FLOOR)),
-                "done":   True,
+                "state":         self._build_observation(),
+                "reward":        reward,
+                "score":         reward,
+                "done":          True,
+                "issue_score":   _clamp(last.get("issue_score", SCORE_FLOOR)),
+                "line_score":    _clamp(last.get("line_score", SCORE_FLOOR)),
+                "compile_score": _clamp(last.get("compile_score", SCORE_FLOOR)),
+                "test_score":    _clamp(last.get("test_score", SCORE_FLOOR)),
             }
 
         self._steps_taken += 1
@@ -72,6 +89,7 @@ class CodeReviewEnv:
                 "reward": SCORE_FLOOR,
                 "done":   False,
                 "hint":   (self._task or {}).get("bug_type", "unknown"),
+                **_default_axes(),
             }
 
         if action_type == "run_test":
@@ -81,6 +99,7 @@ class CodeReviewEnv:
                     "state":  self._build_observation(),
                     "reward": SCORE_FLOOR,
                     "done":   False,
+                    **_default_axes(),
                 }
             case   = test_cases[0]
             passed = run_code(action.get("fix", ""), case["input"])[0]
@@ -89,6 +108,7 @@ class CodeReviewEnv:
                 "reward":      SCORE_FLOOR,
                 "done":        False,
                 "test_result": "pass" if passed else "fail",
+                **_default_axes(),
             }
 
         # Submit — grade the action
@@ -106,12 +126,22 @@ class CodeReviewEnv:
         # Clamp strictly between 0.01 and 0.99
         final_reward = _clamp(penalty_result.get("final_reward", SCORE_FLOOR))
 
+        # Clamp individual axis scores
+        clamped_issue   = _clamp(grade_result.get("issue_score", SCORE_FLOOR))
+        clamped_line    = _clamp(grade_result.get("line_score", SCORE_FLOOR))
+        clamped_compile = _clamp(grade_result.get("compile_score", SCORE_FLOOR))
+        clamped_test    = _clamp(grade_result.get("test_score", SCORE_FLOOR))
+
         self._done = True
         self._last_result = {
             **grade_result,
             **penalty_result,
-            "final_reward": final_reward,
-            "steps_taken":  self._steps_taken,
+            "final_reward":  final_reward,
+            "issue_score":   clamped_issue,
+            "line_score":    clamped_line,
+            "compile_score": clamped_compile,
+            "test_score":    clamped_test,
+            "steps_taken":   self._steps_taken,
         }
 
         self._history.append({
@@ -122,9 +152,14 @@ class CodeReviewEnv:
         })
 
         return {
-            "state":  self._build_observation(),
-            "reward": final_reward,
-            "done":   True,
+            "state":         self._build_observation(),
+            "reward":        final_reward,
+            "score":         final_reward,
+            "done":          True,
+            "issue_score":   clamped_issue,
+            "line_score":    clamped_line,
+            "compile_score": clamped_compile,
+            "test_score":    clamped_test,
         }
 
     def state(self) -> dict:
@@ -132,13 +167,24 @@ class CodeReviewEnv:
         difficulty    = task.get("difficulty") if task else None
         steps_allowed = STEP_ALLOWANCES.get(difficulty, 0) if difficulty else 0
 
+        # Filter result to only expose clamped numeric scores (no raw booleans)
+        lr = self._last_result or {}
+        safe_result = {}
+        for k, v in lr.items():
+            if k == "breakdown":
+                continue
+            if isinstance(v, float):
+                safe_result[k] = _clamp(v)
+            else:
+                safe_result[k] = v
+
         return {
             "task_id":       task.get("id") if task else None,
             "difficulty":    difficulty,
             "steps_taken":   self._steps_taken,
             "steps_allowed": steps_allowed,
             "done":          self._done,
-            "result":        self._last_result or {},
+            "result":        safe_result,
         }
 
     def leaderboard(self) -> list[dict]:

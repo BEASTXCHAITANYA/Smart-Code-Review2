@@ -71,10 +71,30 @@ interface:
         type: object
       reward:
         type: number
-        minimum: 0.0
-        maximum: 1.0
+        exclusiveMinimum: 0
+        exclusiveMaximum: 1
+      score:
+        type: number
+        exclusiveMinimum: 0
+        exclusiveMaximum: 1
       done:
         type: boolean
+      issue_score:
+        type: number
+        exclusiveMinimum: 0
+        exclusiveMaximum: 1
+      line_score:
+        type: number
+        exclusiveMinimum: 0
+        exclusiveMaximum: 1
+      compile_score:
+        type: number
+        exclusiveMinimum: 0
+        exclusiveMaximum: 1
+      test_score:
+        type: number
+        exclusiveMinimum: 0
+        exclusiveMaximum: 1
 
   state:
     description: Return current environment state at any point
@@ -107,12 +127,13 @@ tasks:
     bug_line: 7
 
 reward:
-  min: 0.0
-  max: 1.0
+  min: 0.01
+  max: 0.99
   description: >
     Weighted sum: 30% issue description + 20% line identification
     + 20% compile check + 30% test cases. Time penalty of 0.05
     per extra step beyond free-step allowance.
+    All scores strictly between 0.01 and 0.99.
 
 scoring:
   axes:
