@@ -104,8 +104,8 @@ def grade(task: dict, action: dict) -> dict:
         fix, task.get("code", "")
     )
     if is_adversarial:
-        compile_score = 0.0
-        test_score    = 0.0
+        compile_score = 0.01
+        test_score    = 0.01
         tests_passed  = 0
 
     # ── Final weighted sum ──────────────────────────────────────────
@@ -159,7 +159,7 @@ def grade(task: dict, action: dict) -> dict:
 
 def _score_issues(agent_issues: str, expected_type: str) -> float:
     if not expected_type or not agent_issues:
-        return 0.0
+        return 0.01
 
     def _norm(s: str) -> str:
         return s.lower().replace("-", " ").replace("_", " ").strip()
@@ -172,9 +172,9 @@ def _score_issues(agent_issues: str, expected_type: str) -> float:
         or agent_norm in expected_norm
         or agent_norm == expected_norm
     ):
-        return 1.0
+        return 0.99
 
-    return 0.0
+    return 0.01
 
 
 def _score_line(agent_line: int, correct_line: int) -> float:
@@ -182,22 +182,22 @@ def _score_line(agent_line: int, correct_line: int) -> float:
         agent_line   = int(agent_line)
         correct_line = int(correct_line)
     except (TypeError, ValueError):
-        return 0.0
+        return 0.01
 
-    return 1.0 if abs(agent_line - correct_line) <= 1 else 0.0
+    return 0.99 if abs(agent_line - correct_line) <= 1 else 0.01
 
 
 def _score_compile(fix: str) -> tuple[float, str]:
     if not fix.strip():
-        return 0.0, "ERROR: empty fix"
+        return 0.01, "ERROR: empty fix"
 
     success, output = run_code(fix, "", raw_script=True)
-    return (1.0 if success else 0.0), output
+    return (0.99 if success else 0.01), output
 
 
 def score_reasoning(issues: list) -> float:
     if not issues:
-        return 0.0
+        return 0.01
 
     score = 0.0
     for issue in issues:
@@ -213,16 +213,16 @@ def score_reasoning(issues: list) -> float:
         ]):
             score += 0.3
 
-    return min(score / len(issues), 1.0)
+    return min(max(0.01,score / len(issues)), 0.99)
 
 
 def _score_reasoning(issues_list: list, expected_type: str) -> float:
     if not issues_list:
-        return 0.0
+        return 0.01
 
     non_empty = [str(i).strip() for i in issues_list if str(i).strip()]
     if not non_empty:
-        return 0.0
+        return 0.01
 
     score = 0.4
     if len(non_empty) >= 2:
@@ -260,11 +260,11 @@ def _detect_adversarial(fix: str, original_code: str) -> tuple[bool, str]:
 def _score_tests(fix: str, test_cases: list) -> tuple[float, int, int]:
     total = len(test_cases)
     if not fix.strip() or not test_cases:
-        return 0.0, 0, total
+        return 0.01, 0, total
 
     score, passed, total = check_test_cases(fix, test_cases)
-    ratio = (passed / total) if total > 0 else 0.0
-    return round(ratio, 4), passed, total
+    ratio = (passed / total) if total > 0 else 0.01
+    return round(max(0.01, min(0.99, ratio)), 4), passed, total
 
 
 # ── Self-test ──────────────────────────────────────────────────────
