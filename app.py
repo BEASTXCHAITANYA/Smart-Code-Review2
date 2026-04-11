@@ -73,6 +73,10 @@ async def api_step(request: Request):
             body = {}
     except Exception:
         body = {}
+    global _api_env
+    if _api_env._task is None:
+        _api_env = CodeReviewEnv()
+        _api_env.reset()    
 
     action = {
         "bug_line": body.get("bug_line", -1),

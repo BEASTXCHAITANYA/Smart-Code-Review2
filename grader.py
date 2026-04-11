@@ -230,7 +230,7 @@ def _score_reasoning(issues_list: list, expected_type: str) -> float:
     if sum(len(i) for i in non_empty) >= 30:
         score += 0.3
 
-    return round(score, 4)
+    return round(min(0.99, max(0.01, score)), 4)
 
 
 def is_suspicious_fix(original_code: str, fixed_code: str) -> bool:
