@@ -94,12 +94,9 @@ def run_dynamic_test(code: str, test_case: dict) -> dict:
     expected = test_case.get("expected")
 
     # Build the call expression based on input type
-    if isinstance(inp, list):
-        # Multi-arg function: f(arg1, arg2, ...)
-        args = ", ".join(repr(a) for a in inp)
-    else:
-        # Single-arg function: f(arg)
-        args = repr(inp)
+    # the input IS the list argument, not a list of args
+    # sum_list([1,2,3]) not sum_list(1,2,3)
+    args = repr(inp)
 
     # Find the first function name defined in the code
     try:
