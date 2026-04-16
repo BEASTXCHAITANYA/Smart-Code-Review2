@@ -78,6 +78,74 @@ def run_code(code: str, input_data: str, raw_script: bool = False) -> tuple[bool
     return False, "ERROR: unexpected failure"
 
 
+# ── run_dynamic_test ──────────────────────────────────────────────
+
+def run_dynamic_test(code: str, test_case: dict) -> dict:
+    """
+    Run one generated test case against arbitrary Python code.
+    test_case must have keys: 'input' and 'expected'
+
+    Auto-detects whether input is a single value or multi-arg list.
+    Returns dict with: passed, result, expected, error
+    """
+    import ast as _ast
+
+    inp      = test_case.get("input")
+    expected = test_case.get("expected")
+
+    # Build the call expression based on input type
+    if isinstance(inp, list):
+        # Multi-arg function: f(arg1, arg2, ...)
+        args = ", ".join(repr(a) for a in inp)
+    else:
+        # Single-arg function: f(arg)
+        args = repr(inp)
+
+    # Find the first function name defined in the code
+    try:
+        tree  = _ast.parse(code)
+        funcs = [n.name for n in _ast.walk(tree)
+                 if isinstance(n, _ast.FunctionDef)]
+        if not funcs:
+            return {
+                "passed":   False,
+                "result":   None,
+                "expected": expected,
+                "error":    "No function found in code"
+            }
+        fn_name = funcs[0]
+    except SyntaxError as e:
+        return {
+            "passed":   False,
+            "result":   None,
+            "expected": expected,
+            "error":    f"Syntax error: {e}"
+        }
+
+    # Build call expression and run via existing run_code()
+    call_expr = f"{fn_name}({args})"
+    success, output = run_code(code, call_expr)
+
+    if not success:
+        return {
+            "passed":   False,
+            "result":   None,
+            "expected": expected,
+            "error":    output  # stderr from run_code
+        }
+
+    # Compare output string to expected value
+    expected_str = str(expected).strip()
+    passed       = output.strip() == expected_str
+
+    return {
+        "passed":   passed,
+        "result":   output.strip(),
+        "expected": expected_str,
+        "error":    None
+    }
+
+
 # ── Adversarial fix detection ──────────────────────────────────────
 
 # NOTE: This function is currently unused; main detection happens in grader.py

@@ -101,7 +101,7 @@ def grade(task: dict, action: dict) -> dict:
 
     # ── Adversarial fix detection ───────────────────────────────────
     is_adversarial, adversarial_reason = _detect_adversarial(
-        fix, task.get("code", "")
+    fix, task.get("buggy_code", task.get("code", ""))
     )
     if is_adversarial:
         compile_score = 0.01
@@ -118,7 +118,10 @@ def grade(task: dict, action: dict) -> dict:
     final = 0.85 * final + 0.15 * reasoning_score
 
     try:
-        _suspicious = is_suspicious_fix(task.get("code", ""), action.get("fix", ""))
+        _suspicious = is_suspicious_fix(
+            task.get("buggy_code", task.get("code", "")) or "",
+            action.get("fix", "") or "",
+        )
         if not _suspicious and run_adversarial_tests(fix, normal_passed):
             _suspicious = True
     except Exception:

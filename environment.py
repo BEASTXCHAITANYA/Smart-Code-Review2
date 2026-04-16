@@ -60,6 +60,37 @@ class CodeReviewEnv:
 
         return self._build_observation()
 
+    def reset_from_code(self, code: str) -> dict:
+        """
+        Accept arbitrary Python code, generate a task dynamically,
+        and reset the environment — all in one call.
+        """
+        from inference import validate_syntax, generate_task
+
+        # 1. Syntax check first — fail fast before any LLM call
+        check = validate_syntax(code)
+        if not check["valid"]:
+            raise ValueError(check["error"])
+
+        # 2. Generate task via LLM
+        task = generate_task(code)
+
+        # 3. Inject directly into environment
+        self._task        = task
+        self._steps_taken = 0
+        self._done        = False
+        self._last_result = None
+        self._history     = []
+
+        # 4. Return observation in same format as reset()
+        return {
+            "task_id":     task["task_id"],
+            "difficulty":  task["difficulty"],
+            "title":       task.get("description", "Custom review"),
+            "description": task.get("description", ""),
+            "buggy_code":  task["buggy_code"],
+        }
+
     def step(self, action: dict) -> dict:
         if self._task is None:
             raise RuntimeError("No task loaded. Call reset() before step().")
@@ -93,7 +124,7 @@ class CodeReviewEnv:
             }
 
         if action_type == "run_test":
-            test_cases = (self._task or {}).get("tests", [])
+            test_cases = (self._task or {}).get("test_cases", [])
             if not test_cases:
                 return {
                     "state":  self._build_observation(),
@@ -260,7 +291,7 @@ class CodeReviewEnv:
             "difficulty":  task.get("difficulty", "medium"),
             "title":       task.get("title", ""),
             "description": task.get("description", ""),
-            "buggy_code":  task.get("code", ""),
+            "buggy_code":  task.get("buggy_code", task.get("code", "")),
         }
 
 

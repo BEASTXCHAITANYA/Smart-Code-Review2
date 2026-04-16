@@ -29,7 +29,6 @@ SCORE_CEIL  = 0.99
 
 
 def _clamp(score) -> float:
-    """Ensure score is strictly between 0.01 and 0.99."""
     try:
         return float(max(SCORE_FLOOR, min(SCORE_CEIL, float(score))))
     except Exception:
@@ -37,15 +36,11 @@ def _clamp(score) -> float:
 
 
 def _clamp_result(result: dict) -> dict:
-    """Clamp reward in a step result."""
     if not isinstance(result, dict):
         return result
     if "reward" in result:
         result["reward"] = _clamp(result["reward"])
     return result
-
-
-
 
 
 @api.post("/reset")
@@ -57,7 +52,6 @@ async def api_reset(request: Request):
     except Exception:
         task_id = None
     try:
-        # Fresh env instance on every reset — prevents stale state between tasks
         _api_env = CodeReviewEnv()
         obs = _api_env.reset(task_id)
         return JSONResponse(content=obs)
@@ -76,7 +70,7 @@ async def api_step(request: Request):
     global _api_env
     if _api_env._task is None:
         _api_env = CodeReviewEnv()
-        _api_env.reset()    
+        _api_env.reset()
 
     action = {
         "bug_line": body.get("bug_line", -1),
@@ -90,6 +84,92 @@ async def api_step(request: Request):
         return JSONResponse(content=result)
     except Exception as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@api.post("/review")
+async def api_review(request: Request):
+    """
+    Accept any Python code, generate a task dynamically,
+    run the AI agent, grade it, and return full results.
+    """
+    from inference import get_action
+    from codeverifier import run_dynamic_test
+
+    # 1. Parse body
+    try:
+        body = await request.json()
+        code = body.get("code", "").strip() if isinstance(body, dict) else ""
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid request body"})
+
+    if not code:
+        return JSONResponse(status_code=400, content={"error": "No code provided"})
+
+    # 2. Load dynamic task into env (validates syntax + generates task via LLM)
+    try:
+        env = CodeReviewEnv()
+        obs = env.reset_from_code(code)
+    except ValueError as e:
+        # Syntax error from validate_syntax()
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Task generation failed: {e}"})
+
+    # 3. Run AI agent on the buggy code
+    try:
+        action = get_action(obs["buggy_code"])
+        action.pop("used_reflection", None)
+        action.pop("_initial_action", None)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Agent failed: {e}"})
+
+    # 4. Grade via existing step()
+    try:
+        result = env.step(action)
+        result = _clamp_result(result)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Grading failed: {e}"})
+
+    # 5. Run dynamic test cases for UI display
+    task         = env._task or {}
+    test_cases   = task.get("test_cases", [])
+    test_results = []
+    for tc in test_cases:
+        try:
+            tr = run_dynamic_test(action.get("fix", ""), tc)
+            test_results.append({
+                "input":    str(tc.get("input", "")),
+                "expected": str(tc.get("expected", "")),
+                "got":      str(tr.get("result", "error")),
+                "passed":   bool(tr.get("passed", False)),
+                "error":    tr.get("error"),
+            })
+        except Exception as e:
+            test_results.append({
+                "input":    str(tc.get("input", "")),
+                "expected": str(tc.get("expected", "")),
+                "got":      "error",
+                "passed":   False,
+                "error":    str(e),
+            })
+
+    # 6. Return full response
+    lr = env._last_result or {}
+    return JSONResponse(content={
+        "bug_type":    task.get("bug_type", "unknown"),
+        "bug_line":    task.get("bug_line", 0),
+        "description": task.get("description", ""),
+        "fix":         action.get("fix", ""),
+        "issues":      action.get("issues", []),
+        "score":       result.get("reward", SCORE_FLOOR),
+        "issue_score":    _clamp(lr.get("issue_score",   SCORE_FLOOR)),
+        "line_score":     _clamp(lr.get("line_score",    SCORE_FLOOR)),
+        "compile_score":  _clamp(lr.get("compile_score", SCORE_FLOOR)),
+        "test_score":     _clamp(lr.get("test_score",    SCORE_FLOOR)),
+        "tests_passed":   lr.get("tests_passed", 0),
+        "tests_total":    lr.get("tests_total",  0),
+        "test_results":   test_results,
+    })
 
 
 @api.get("/state")
@@ -116,6 +196,70 @@ def load_task(task_id: str, state: dict) -> tuple:
     diff_emoji = {"easy": "🟢", "medium": "🟡", "hard": "🔴"}.get(obs["difficulty"], "⚪")
     header = f"{diff_emoji} **{obs['title']}**  ·  `{obs['task_id']}`"
     return header, obs["description"], obs["buggy_code"], "", "", "", "", "", state
+
+
+def review_custom_code(code: str, state: dict) -> tuple:
+    """Gradio handler for arbitrary code review."""
+    if not code.strip():
+        return "⚠️ Paste some Python code first.", "", "", "", state
+
+    from inference import get_action
+    from codeverifier import run_dynamic_test
+
+    try:
+        env = CodeReviewEnv()
+        obs = env.reset_from_code(code)
+    except ValueError as e:
+        return f"⚠️ {e}", "", "", "", state
+    except Exception as e:
+        return f"⚠️ Task generation failed: {e}", "", "", "", state
+
+    try:
+        action = get_action(obs["buggy_code"])
+        action.pop("used_reflection", None)
+        action.pop("_initial_action", None)
+    except Exception as e:
+        return f"⚠️ Agent failed: {e}", "", "", "", state
+
+    try:
+        result = env.step(action)
+    except Exception as e:
+        return f"⚠️ Grading failed: {e}", "", "", "", state
+
+    lr = env._last_result or {}
+    state["env"]         = env
+    state["last_result"] = result
+
+    # Build test results markdown
+    task       = env._task or {}
+    test_cases = task.get("test_cases", [])
+    test_md    = ""
+    if test_cases:
+        test_md = "\n\n**Test results:**\n| Input | Expected | Got | Pass |\n|---|---|---|---|\n"
+        for tc in test_cases:
+            try:
+                tr     = run_dynamic_test(action.get("fix", ""), tc)
+                got    = str(tr.get("result", "error"))
+                passed = "✅" if tr.get("passed") else "❌"
+            except Exception:
+                got    = "error"
+                passed = "❌"
+            test_md += f"| `{tc.get('input','')}` | `{tc.get('expected','')}` | `{got}` | {passed} |\n"
+
+    bug_info = (
+        f"**Bug type:** `{task.get('bug_type', 'unknown')}`  ·  "
+        f"**Bug line:** `{task.get('bug_line', '?')}`\n\n"
+        f"**Description:** {task.get('description', '')}"
+        f"{test_md}"
+    )
+
+    return (
+        _reward_bar(result["reward"]),
+        _scores_table(lr),
+        bug_info,
+        action.get("fix", ""),
+        state,
+    )
 
 
 def run_inference(task_id: str, state: dict) -> tuple:
@@ -197,55 +341,77 @@ with gr.Blocks() as gradio_app:
 
     gr.Markdown("# 🧠 Smart Code Review")
     gr.Markdown(
-        "An AI-powered code review environment. Pick a buggy Python task, "
-        "run the AI agent or submit your own fix, and see how it scores."
+        "Paste any Python function — the AI finds the bug, "
+        "generates a fix, runs it, and scores the result."
     )
 
-    with gr.Row():
-        task_dropdown = gr.Dropdown(
-            choices=[(TASK_LABEL[tid], tid) for tid in TASK_IDS],
-            value=TASK_IDS[0], label="Select Task", scale=4,
-        )
-        load_btn = gr.Button("Load Task ▶️", variant="primary", scale=1)
-
-    task_header = gr.Markdown("*Load a task to begin.*")
-
-    with gr.Row():
-        with gr.Column(scale=1):
-            task_desc  = gr.Textbox(label="Task Description", lines=3, interactive=False)
-        with gr.Column(scale=2):
-            buggy_code = gr.Code(label="Buggy Code", language="python",
-                                 lines=14, interactive=False)
-
-    gr.Markdown("---")
-
     with gr.Tabs():
-        with gr.TabItem("🤖  AI Agent"):
-            gr.Markdown(
-                "> Runs GPT-4o with self-reflection.  \n"
-                "> Requires `HF_TOKEN` or `OPENAI_API_KEY` in Space Secrets."
+
+        with gr.TabItem("🔍 Review Any Code"):
+            gr.Markdown("> Paste any Python function. Works on code you write, not just preloaded tasks.")
+            custom_code_input = gr.Code(
+                label="Paste your Python code here",
+                language="python",
+                lines=14,
+                value="def sum_list(numbers):\n    total = 0\n    for i in range(1, len(numbers)):\n        total += numbers[i]\n    return total",
             )
-            agent_btn    = gr.Button("Run AI Agent ⚡", variant="primary")
-            agent_reward = gr.Markdown("*Run the agent to see results.*")
-            agent_scores = gr.Markdown()
-            with gr.Accordion("Agent Action (JSON)", open=False):
-                agent_action_md = gr.Markdown()
-            with gr.Accordion("Agent's Fixed Code", open=False):
-                agent_fix = gr.Code(language="python", lines=16, interactive=False)
+            custom_btn    = gr.Button("Review This Code ⚡", variant="primary")
+            custom_reward = gr.Markdown("*Paste code and click Review.*")
+            custom_scores = gr.Markdown()
+            custom_bug    = gr.Markdown()
+            with gr.Accordion("Fixed Code", open=False):
+                custom_fix = gr.Code(language="python", lines=14, interactive=False)
 
-        with gr.TabItem("✍️  Manual Submission"):
-            gr.Markdown("> Enter your own bug analysis and fix, then click Submit.")
+        with gr.TabItem("📋 Preloaded Tasks"):
+            gr.Markdown("> Choose a preloaded buggy task and run the AI agent or submit your own fix.")
             with gr.Row():
-                manual_line   = gr.Textbox(label="Bug Line Number",
-                                           placeholder="e.g. 3", scale=1)
-                manual_issues = gr.Textbox(label="Issues (comma-separated)",
-                                           placeholder="e.g. off-by-one", scale=3)
-            manual_fix    = gr.Code(label="Your Fixed Code", language="python",
-                                    lines=14, value="# Paste your corrected code here")
-            manual_btn    = gr.Button("Submit Fix ✅", variant="primary")
-            manual_reward = gr.Markdown()
-            manual_scores = gr.Markdown()
+                task_dropdown = gr.Dropdown(
+                    choices=[(TASK_LABEL[tid], tid) for tid in TASK_IDS],
+                    value=TASK_IDS[0], label="Select Task", scale=4,
+                )
+                load_btn = gr.Button("Load Task ▶️", variant="primary", scale=1)
 
+            task_header = gr.Markdown("*Load a task to begin.*")
+
+            with gr.Row():
+                with gr.Column(scale=1):
+                    task_desc  = gr.Textbox(label="Task Description", lines=3, interactive=False)
+                with gr.Column(scale=2):
+                    buggy_code = gr.Code(label="Buggy Code", language="python",
+                                         lines=14, interactive=False)
+
+            gr.Markdown("---")
+
+            with gr.Tabs():
+                with gr.TabItem("🤖 AI Agent"):
+                    agent_btn    = gr.Button("Run AI Agent ⚡", variant="primary")
+                    agent_reward = gr.Markdown("*Run the agent to see results.*")
+                    agent_scores = gr.Markdown()
+                    with gr.Accordion("Agent Action (JSON)", open=False):
+                        agent_action_md = gr.Markdown()
+                    with gr.Accordion("Agent's Fixed Code", open=False):
+                        agent_fix = gr.Code(language="python", lines=16, interactive=False)
+
+                with gr.TabItem("✍️ Manual Submission"):
+                    with gr.Row():
+                        manual_line   = gr.Textbox(label="Bug Line Number",
+                                                   placeholder="e.g. 3", scale=1)
+                        manual_issues = gr.Textbox(label="Issues (comma-separated)",
+                                                   placeholder="e.g. off-by-one", scale=3)
+                    manual_fix    = gr.Code(label="Your Fixed Code", language="python",
+                                            lines=14, value="# Paste your corrected code here")
+                    manual_btn    = gr.Button("Submit Fix ✅", variant="primary")
+                    manual_reward = gr.Markdown()
+                    manual_scores = gr.Markdown()
+
+    # Wire up custom review tab
+    custom_btn.click(
+        review_custom_code,
+        inputs=[custom_code_input, state],
+        outputs=[custom_reward, custom_scores, custom_bug, custom_fix, state],
+    )
+
+    # Wire up preloaded tasks tab
     load_btn.click(
         load_task,
         inputs=[task_dropdown, state],

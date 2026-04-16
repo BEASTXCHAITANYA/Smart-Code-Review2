@@ -13,6 +13,7 @@ Environment variables (injected by OpenEnv validator):
     MODEL_NAME    — model to use (default: gpt-4o)
 """
 
+import ast
 import os
 import re
 import sys
@@ -40,6 +41,125 @@ You are a Python code reviewer. Given buggy Python code, you must:
 Respond ONLY with valid JSON in this exact format:
 {"bug_line": <int>, "issues": [<str>, ...], "fix": "<corrected code>"}
 """
+
+
+def validate_syntax(code: str) -> dict:
+    """Returns {'valid': True} or {'valid': False, 'error': '...'}"""
+    try:
+        ast.parse(code)
+        return {"valid": True}
+    except SyntaxError as e:
+        return {
+            "valid": False,
+            "error": f"Syntax error on line {e.lineno}: {e.msg}"
+        }
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+
+
+def generate_task(code: str) -> dict:
+    """
+    Given any Python code, generate a full task dict
+    compatible with environment.py's task format.
+    Returns dict with: task_id, difficulty, description,
+    bug_type, bug_line, buggy_code, test_cases[]
+    """
+    import openai
+    client = openai.OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+
+    prompt = (
+        "You are a Python bug analysis expert.\n"
+        "Analyze this code and respond with ONLY valid JSON. "
+        "No markdown. No explanation. Pure JSON only.\n\n"
+        "Return exactly this structure:\n"
+        "{\n"
+        '  "task_id": "custom_review",\n'
+        '  "difficulty": "medium",\n'
+        '  "description": "one sentence: what should this function do",\n'
+        '  "bug_type": "category of bug",\n'
+        '  "bug_line": <integer, 1-indexed line number of the bug>,\n'
+        '  "test_cases": [\n'
+        '    {"input": <value>, "expected": <value>},\n'
+        '    {"input": <value>, "expected": <value>},\n'
+        '    {"input": <value>, "expected": <value>}\n'
+        "  ]\n"
+        "}\n\n"
+        "Rules:\n"
+        "- bug_type must be one of: off-by-one, missing-validation,\n"
+        "  mutable-default-argument, logic-error, type-error, none\n"
+        "- bug_line must be the EXACT line number containing the bug\n"
+        "- test_cases: inputs that FAIL on buggy code, PASS on fixed code\n"
+        "- input can be a single value OR a list for multi-arg functions\n"
+        "- If no bug exists: bug_type='none', bug_line=0,\n"
+        "  test_cases should still verify correct behavior\n\n"
+        f"Code:\n{code}"
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+    except Exception as e:
+        print(f"[WARN] generate_task LLM call failed: {e}")
+        return _safe_task_fallback(code)
+
+    # Strip markdown fences if LLM ignores instructions
+    md_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+    if md_match:
+        raw = md_match.group(1).strip()
+
+    # Try to extract JSON object if surrounded by extra text
+    parsed = {}
+    brace_match = re.search(r"\{[\s\S]*\}", raw)
+    if brace_match:
+        try:
+            parsed = json.loads(brace_match.group(0))
+        except Exception:
+            pass
+
+    # Final fallback: parse entire raw string
+    if not parsed:
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            print("[WARN] generate_task: JSON parse failed, using fallback")
+            return _safe_task_fallback(code)
+
+    # Validate test_cases — must be list of dicts with input+expected
+    test_cases = parsed.get("test_cases", [])
+    if not isinstance(test_cases, list):
+        test_cases = []
+    test_cases = [
+        tc for tc in test_cases
+        if isinstance(tc, dict) and "input" in tc and "expected" in tc
+    ]
+
+    return {
+        "task_id":     str(parsed.get("task_id", "custom_review")),
+        "difficulty":  str(parsed.get("difficulty", "medium")),
+        "description": str(parsed.get("description", "Review this function")),
+        "bug_type":    str(parsed.get("bug_type", "unknown")),
+        "bug_line":    int(parsed.get("bug_line", 1)),
+        "buggy_code":  code,
+        "test_cases":  test_cases,
+    }
+
+
+def _safe_task_fallback(code: str) -> dict:
+    """Used when generate_task() LLM call or JSON parse fails."""
+    return {
+        "task_id":     "custom_review",
+        "difficulty":  "medium",
+        "description": "Review this Python function",
+        "bug_type":    "unknown",
+        "bug_line":    1,
+        "buggy_code":  code,
+        "test_cases":  [],
+    }
+
 
 
 def _clamp(score) -> float:
