@@ -11,7 +11,7 @@ tags:
 
 # 🔥 Smart Code Review — OpenEnv
 
-### What if every pull request had a senior engineer reviewing it — instantly?
+### Paste any Python function. The AI finds the bug, generates a verified fix, and scores it — instantly.
 
 > An AI-powered code review environment built for the **Meta OpenEnv Hackathon**.
 > Agents don't just find bugs — they *trace execution*, *classify issues*, and *generate verified fixes* — all under time pressure.
@@ -42,6 +42,22 @@ Existing tools fall short:
 **Smart Code Review** doesn't just parse code — it **traces execution with concrete inputs** to find bugs that only surface at runtime.
 
 ---
+## ✨ What Makes This Different
+
+### Works on Any Python Code
+Paste any function — the AI dynamically generates the task, test cases, and scoring criteria on the fly. No preloaded templates required. The system analyzes your code, identifies the bug type, generates 3 test cases, runs the fix, and scores it — all in under 10 seconds.
+
+### Verified Fixes — Not Just Suggestions
+The fix is **actually executed** via `subprocess` in an isolated sandbox with a 5-second timeout. If it doesn't run and pass tests, it doesn't score well. No string-matching, no fake scoring.
+
+### Dynamic Task Generation
+Unlike static code review tools, Smart Code Review generates evaluation criteria dynamically for any input:
+- Detects bug type automatically (`off-by-one`, `missing-validation`, `logic-error`, etc.)
+- Generates 3 concrete test cases that fail on buggy code and pass on the fix
+- Scores across 4 axes with no hardcoded answers
+
+---
+
 
 ## Overview
 
@@ -337,6 +353,3 @@ docker run -e API_KEY=your-key -e API_BASE_URL=your-url -p 7860:7860 smart-code-
 
 ---
 
-*Code review shouldn't be a bottleneck. It should be instant, accurate, and always available.*
-
-*Built for the Meta OpenEnv Hackathon.*
